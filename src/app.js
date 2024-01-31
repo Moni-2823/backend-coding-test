@@ -2,9 +2,15 @@
 
 const express = require('express');
 const app = express();
+var ExpressBrute = require('express-brute');
+ 
+var store = new ExpressBrute.MemoryStore(); // stores state locally, don't use this in production
+var bruteforce = new ExpressBrute(store);
 
 const bodyParser = require('body-parser');
 const jsonParser = bodyParser.json();
+
+const logger = require('../helper/winston');
 
 const Ride = require('./schemas');
 
@@ -13,7 +19,7 @@ app.get('/health', (req, res) => res.send('Healthy'));
 // Endpoint to create a new ride record in the database with validations.
 // Validates the request body parameters and saves the ride data to the database.
 // Returns the saved ride data or an error response.
-app.post('/rides', jsonParser, async (req, res) => {
+app.post('/rides', jsonParser, bruteforce.prevent, async (req, res) => {
     try {
         
         let {startLatitude, startLongitude, endLatitude, endLongitude, riderName, driverName, driverVehicle, rideID} = req.body;
@@ -61,8 +67,10 @@ app.post('/rides', jsonParser, async (req, res) => {
     
         const db = new Ride(values);
         const savedData = await db.save();
+        logger.info('New ride created', { rideID: savedData.rideID });
         return res.status(201).send(savedData);
     } catch (error) {
+        logger.error('Error creating new ride', { error: error.message });
         console.log('error', error);
         return res.send({
             error_code: 'SERVER_ERROR',
@@ -71,19 +79,7 @@ app.post('/rides', jsonParser, async (req, res) => {
     }
 });
 
-// app.get('/rides', async (req, res) => {
-//     const rides = await Ride.find();
-//     if (rides.length === 0) {
-//       return res.send({
-//         error_code: 'RIDES_NOT_FOUND_ERROR',
-//         message: 'Could not find any rides'
-//       });
-//     }
-//     res.send(rides);
-//     });
-
-
-app.get('/rides', async (req, res) => {
+app.get('/rides', bruteforce.prevent, async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const startIndex = (page - 1) * limit;
@@ -105,34 +101,37 @@ app.get('/rides', async (req, res) => {
     }
   
     try {
-      results.results = await Ride.find().limit(limit).skip(startIndex).exec();
-      res.send(results);
-    } catch (err) {
-      res.status(500).send({ error_code: 'SERVER_ERROR', message: err.message });
+        const rides = await Ride.find().limit(limit).skip(startIndex).exec();
+        logger.info(`Retrieved rides with page ${page} and limit ${limit}`);
+        results.results = rides;
+        res.send(results);
+      } catch (err) {
+        logger.error(`Error retrieving rides: ${err.message}`);
+        res.status(500).send({ error_code: 'SERVER_ERROR', message: err.message });
+      }
+});
+
+app.get('/rides/:id', bruteforce.prevent, async (req, res) => {
+    try {
+      const ride = await Ride.findOne({ _id: req.params.id });
+  
+      if (!ride) {
+        logger.warn('Ride not found with id: ' + req.params.id);
+        return res.status(404).send({
+          error_code: 'RIDES_NOT_FOUND_ERROR',
+          message: 'Could not find any rides'
+        });
+      }
+  
+      logger.info('Retrieved ride with id: ' + req.params.id);
+      res.send(ride);
+    } catch (error) {
+      logger.error('Error retrieving ride: ' + error.message);
+      res.status(500).send({
+        error_code: 'SERVER_ERROR',
+        message: 'Internal Server Error'
+      });
     }
   });
-  
-    app.get('/rides/:id', async (req, res) => {
-        try {
-            const ride = await Ride.findOne({ _id: req.params.id });
-    
-            if (!ride) {
-                return res.send({
-                    error_code: 'RIDES_NOT_FOUND_ERROR',
-                    message: 'Could not find any rides'
-                });
-            }
-    
-            res.send(ride);
-        } catch (error) {
-            // Handle any potential errors here
-            console.error(error);
-            res.status(500).send({
-                error_code: 'SERVER_ERROR',
-                message: 'Internal Server Error'
-            });
-        }
-    });
 
 module.exports = app;
-// };
